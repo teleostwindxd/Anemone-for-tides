@@ -4,32 +4,43 @@ import os
 import time
 from datetime import timedelta
 from collections import defaultdict
+from keep_alive import keep_alive # Imports the fake web server
 
 # --- Bot Setup ---
-# We need to enable intents to read messages and member data
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+# Added a professional-looking status
+bot = commands.Bot(command_prefix='!', intents=intents, activity=discord.Game(name="Watching the server | !help"))
 
-# Dictionary for simple anti-spam: tracks timestamps of messages per user
+# Tracking for anti-spam and warnings
 user_messages = defaultdict(list)
-# Dictionary for warnings (Note: In a real production bot, use a database like SQLite instead of memory)
 user_warnings = defaultdict(int)
+
+# A simple list of banned words for the auto-filter
+BANNED_WORDS = ["badword1", "badword2", "spamlink.com"]
 
 @bot.event
 async def on_ready():
-    print(f'Logged in as {bot.user.name} ({bot.user.id})')
+    print(f'✅ Logged in as {bot.user.name} ({bot.user.id})')
     print('------')
 
-# --- Anti-Spam Feature ---
+# --- Smart Auto-Moderation ---
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # Anti-spam logic: Check if user sent more than 5 messages in 5 seconds
+    # 1. Banned Word Filter
+    content_lower = message.content.lower()
+    if any(word in content_lower for word in BANNED_WORDS):
+        await message.delete()
+        warning_msg = await message.channel.send(f"⚠️ {message.author.mention}, please watch your language!")
+        await warning_msg.delete(delay=5)
+        return # Stop processing so they don't get away with it
+
+    # 2. Advanced Anti-Spam (Auto-Mutes after 5 messages in 5 seconds)
     author_id = message.author.id
     current_time = time.time()
     user_messages[author_id].append(current_time)
@@ -40,97 +51,103 @@ async def on_message(message):
     if len(user_messages[author_id]) > 5:
         await message.delete()
         try:
-            await message.author.send("You are sending messages too quickly. Please slow down!")
+            # Auto-timeout for 5 minutes
+            duration = timedelta(minutes=5)
+            await message.author.timeout(duration, reason="Automated Spam Prevention")
+            
+            embed = discord.Embed(title="Anti-Spam Triggered", description=f"{message.author.mention} has been auto-muted for 5 minutes for spamming.", color=discord.Color.red())
+            await message.channel.send(embed=embed)
         except discord.Forbidden:
-            pass # User has DMs disabled
-        return # Don't process commands if spamming
+            pass # Bot lacks permission to timeout this specific user (e.g., an Admin)
+        return
 
-    # Required to make sure @bot.command() works alongside on_message
+    # Process normal commands
     await bot.process_commands(message)
 
-# --- Moderation Commands ---
+# --- Enhanced Moderation Commands (Using Embeds) ---
 
 @bot.command()
 @commands.has_permissions(kick_members=True)
 async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
-    """Kicks a member from the server."""
     await member.kick(reason=reason)
-    await ctx.send(f'**{member.name}** has been kicked. Reason: {reason}')
+    embed = discord.Embed(title="Member Kicked 👢", color=discord.Color.orange())
+    embed.add_field(name="User", value=member.mention, inline=False)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.add_field(name="Moderator", value=ctx.author.mention, inline=False)
+    await ctx.send(embed=embed)
 
 @bot.command()
 @commands.has_permissions(ban_members=True)
 async def ban(ctx, member: discord.Member, *, reason="No reason provided"):
-    """Bans a member from the server."""
     await member.ban(reason=reason)
-    await ctx.send(f'**{member.name}** has been banned. Reason: {reason}')
+    embed = discord.Embed(title="Member Banned 🔨", color=discord.Color.red())
+    embed.add_field(name="User", value=member.mention, inline=False)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.add_field(name="Moderator", value=ctx.author.mention, inline=False)
+    await ctx.send(embed=embed)
 
 @bot.command()
 @commands.has_permissions(moderate_members=True)
 async def mute(ctx, member: discord.Member, minutes: int, *, reason="No reason provided"):
-    """Mutes (timeouts) a member for a specified number of minutes."""
     duration = timedelta(minutes=minutes)
     await member.timeout(duration, reason=reason)
-    await ctx.send(f'**{member.name}** has been muted for {minutes} minutes. Reason: {reason}')
+    embed = discord.Embed(title="Member Muted 🔇", color=discord.Color.gold())
+    embed.add_field(name="User", value=member.mention, inline=False)
+    embed.add_field(name="Duration", value=f"{minutes} minutes", inline=False)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    await ctx.send(embed=embed)
 
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def clear(ctx, amount: int):
-    """Deletes a specified number of messages."""
-    # amount + 1 to also delete the command message itself
     deleted = await ctx.channel.purge(limit=amount + 1)
-    await ctx.send(f'Deleted {len(deleted)-1} messages.', delete_after=5)
+    msg = await ctx.send(f'🧹 Successfully deleted {len(deleted)-1} messages.')
+    await msg.delete(delay=3) # Auto-deletes the success message so chat stays clean
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def lock(ctx):
-    """Locks the current channel so regular members can't send messages."""
     await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
-    await ctx.send("🔒 This channel has been locked.")
+    embed = discord.Embed(title="Channel Locked 🔒", description="Regular members can no longer send messages here.", color=discord.Color.red())
+    await ctx.send(embed=embed)
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def unlock(ctx):
-    """Unlocks the current channel."""
     await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
-    await ctx.send("🔓 This channel has been unlocked.")
+    embed = discord.Embed(title="Channel Unlocked 🔓", description="Regular members can now send messages here.", color=discord.Color.green())
+    await ctx.send(embed=embed)
 
 @bot.command()
 @commands.has_permissions(kick_members=True)
 async def warn(ctx, member: discord.Member, *, reason="No reason provided"):
-    """Issues a warning to a member."""
     user_warnings[member.id] += 1
     warnings_count = user_warnings[member.id]
     
     try:
-        await member.send(f"You have been warned in {ctx.guild.name}. Reason: {reason}. You now have {warnings_count} warning(s).")
+        await member.send(f"⚠️ You have been warned in **{ctx.guild.name}**. Reason: {reason}. You now have {warnings_count} warning(s).")
     except discord.Forbidden:
-        await ctx.send(f"Could not DM {member.name}, but the warning was recorded.")
+        pass
         
-    await ctx.send(f"**{member.name}** has been warned. They now have {warnings_count} warning(s).")
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def dm(ctx, member: discord.Member, *, message_content):
-    """Sends a direct message to a specific member."""
-    try:
-        await member.send(message_content)
-        await ctx.send(f"Successfully sent a DM to **{member.name}**.")
-    except discord.Forbidden:
-        await ctx.send(f"Failed to DM **{member.name}**. Their DMs might be closed.")
+    embed = discord.Embed(title="Warning Issued ⚠️", color=discord.Color.yellow())
+    embed.add_field(name="User", value=member.mention, inline=False)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.add_field(name="Total Warnings", value=warnings_count, inline=False)
+    await ctx.send(embed=embed)
 
 # --- Error Handling ---
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("You do not have permission to use this command!")
+        await ctx.send("❌ You do not have permission to use this command!")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("You are missing a required argument for this command.")
+        await ctx.send("❌ You are missing a required argument. Try checking the command usage.")
     elif isinstance(error, commands.MemberNotFound):
-        await ctx.send("Could not find that member.")
+        await ctx.send("❌ Could not find that member in the server.")
 
 # --- Start Bot ---
 if __name__ == "__main__":
-    # Grabs the token from the environment variable set in Render
+    keep_alive() # Starts the fake Flask web server for Render
     TOKEN = os.getenv("DISCORD_TOKEN")
     if TOKEN is None:
         print("Error: DISCORD_TOKEN environment variable not set.")

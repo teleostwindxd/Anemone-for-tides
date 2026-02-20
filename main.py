@@ -11,20 +11,34 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-# Added a professional-looking status
 bot = commands.Bot(command_prefix='!', intents=intents, activity=discord.Game(name="Watching the server | !help"))
 
 # Tracking for anti-spam and warnings
 user_messages = defaultdict(list)
 user_warnings = defaultdict(int)
 
-# A simple list of banned words for the auto-filter
+# Banned word list
 BANNED_WORDS = ["badword1", "badword2", "spamlink.com"]
+
+# Allowed Role IDs for sending GIFs
+ALLOWED_GIF_ROLES = [
+    1371466080404373507,
+    1371466080387862661,
+    1371468894853795871,
+    1371466080404373506,
+    1371466080366760064,
+    1376303683599335434
+]
+
+# The GIF to send when someone gets caught
+BROKE_GIF_LINK = "https://tenor.com/view/you%27re-broke-broke-brokie-andrew-tate-tate-gif-13383070538022521939"
+
 
 @bot.event
 async def on_ready():
     print(f'✅ Logged in as {bot.user.name} ({bot.user.id})')
     print('------')
+
 
 # --- Smart Auto-Moderation ---
 @bot.event
@@ -32,13 +46,14 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # 1. Banned Word Filter
     content_lower = message.content.lower()
+
+    # 1. Banned Word Filter
     if any(word in content_lower for word in BANNED_WORDS):
         await message.delete()
         warning_msg = await message.channel.send(f"⚠️ {message.author.mention}, please watch your language!")
         await warning_msg.delete(delay=5)
-        return # Stop processing so they don't get away with it
+        return # Stop processing
 
     # 2. Advanced Anti-Spam (Auto-Mutes after 5 messages in 5 seconds)
     author_id = message.author.id
@@ -51,18 +66,46 @@ async def on_message(message):
     if len(user_messages[author_id]) > 5:
         await message.delete()
         try:
-            # Auto-timeout for 5 minutes
             duration = timedelta(minutes=5)
             await message.author.timeout(duration, reason="Automated Spam Prevention")
-            
             embed = discord.Embed(title="Anti-Spam Triggered", description=f"{message.author.mention} has been auto-muted for 5 minutes for spamming.", color=discord.Color.red())
             await message.channel.send(embed=embed)
         except discord.Forbidden:
-            pass # Bot lacks permission to timeout this specific user (e.g., an Admin)
+            pass 
         return
+
+    # 3. GIF Block Filter
+    # First, verify the author is an actual Member in a Server (not DMing the bot)
+    if isinstance(message.author, discord.Member):
+        # Check if the user has any of the allowed roles
+        has_allowed_role = any(role.id in ALLOWED_GIF_ROLES for role in message.author.roles)
+        
+        if not has_allowed_role:
+            is_gif = False
+            
+            # Look for common GIF domains and extensions in the text
+            if "tenor.com/view" in content_lower or "giphy.com/gifs" in content_lower or ".gif" in content_lower:
+                is_gif = True
+                
+            # If no link was found, check if they uploaded a GIF file directly
+            if not is_gif:
+                for attachment in message.attachments:
+                    if attachment.filename.lower().endswith(".gif") or (attachment.content_type and "gif" in attachment.content_type):
+                        is_gif = True
+                        break
+            
+            # If a GIF is detected, delete it and ping them
+            if is_gif:
+                try:
+                    await message.delete()
+                    await message.channel.send(f"{message.author.mention} {BROKE_GIF_LINK}")
+                except discord.Forbidden:
+                    pass # Fails safely if bot lacks permission
+                return # Stop processing so commands aren't run
 
     # Process normal commands
     await bot.process_commands(message)
+
 
 # --- Enhanced Moderation Commands (Using Embeds) ---
 
@@ -102,7 +145,7 @@ async def mute(ctx, member: discord.Member, minutes: int, *, reason="No reason p
 async def clear(ctx, amount: int):
     deleted = await ctx.channel.purge(limit=amount + 1)
     msg = await ctx.send(f'🧹 Successfully deleted {len(deleted)-1} messages.')
-    await msg.delete(delay=3) # Auto-deletes the success message so chat stays clean
+    await msg.delete(delay=3)
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
